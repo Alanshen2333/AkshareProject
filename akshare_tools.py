@@ -1,3 +1,5 @@
+# 工具模块
+
 import sqlite3
 
 import akshare as ak
@@ -50,7 +52,7 @@ def get_stock_zh_a_spot_data(symbol: str = "sh000001", period: str = "daily", st
         # 2. 清洗和准备数据 (保持不变)
         df['日期'] = df['日期'].astype(str)
 
-        # 3. **核心操作：存入固定的 TABLE_NAME**
+        # 3. 核心操作：存入固定的 TABLE_NAME
         conn = get_db_connection()
         # 存入固定的表，替换现有数据
         df.to_sql(TABLE_NAME, conn, if_exists='replace', index=False)
@@ -173,11 +175,11 @@ def query_macro_data(indicator: Literal['CPI', 'GDP']) -> str:
     try:
         # 1. 数据获取和初始重命名 (保持不变)
         if indicator == 'GDP':
-            df = ak.macro_china_gdp_yearly()
+            df = ak.macro_china_gdp_yearly()# akshare获取数据
             df = df.rename(columns={'年度': '年份', '国内生产总值(亿元)': 'GDP(亿元)'})
 
         elif indicator == 'CPI':
-            df = ak.macro_china_cpi_yearly()
+            df = ak.macro_china_cpi_yearly()# akshare获取数据
             df = df.rename(columns={'年度': '年份', '居民消费价格指数(上年=100)': 'CPI_Index'})
 
         else:
@@ -206,10 +208,10 @@ def query_macro_data(indicator: Literal['CPI', 'GDP']) -> str:
         # 将所有行合并成一个字符串
         formatted_string = f"最近的 {indicator} 宏观数据显示：\n" + "\n".join(format_lines)
 
-        # 3. 转换为 JSON 数组格式 (保持不变)
+        # 转换为 JSON 数组格式 (保持不变)
         data_list = df_latest.to_dict(orient='records')
 
-        # 4. **更新 summary 结构**
+        # 更新 summary 结构
         summary = {
             "indicator": indicator,
             "latest_data_points": data_list,  # 保留原始 JSON 数据以备 Agent 复杂分析

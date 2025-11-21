@@ -1,0 +1,27 @@
+# 默认忽略的文件
+/shelf/
+/workspace.xml
+# 基于编辑器的 HTTP 客户端请求
+/httpRequests/
+# Datasource local storage ignored files
+/dataSources/
+/dataSources.local.xml
+
+# ---------------------------------
+# 2. 忽略自动生成和缓存文件
+# ---------------------------------
+# Python virtual environment (您的是 .venv)
+.venv/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# 临时文件或日志
+debug/
+
+# 依赖锁文件 (如果使用 uv 或其他工具)
+*.lock
+
+# SQLite 数据库文件 (运行时生成)
+*.db

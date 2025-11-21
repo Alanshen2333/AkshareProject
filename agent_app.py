@@ -1,6 +1,8 @@
+# 主程序
+
 import os
 from datetime import datetime
-from typing import List, Any
+from typing import List, Any, Dict
 
 import ollama
 import sys
@@ -96,22 +98,33 @@ TOOL_SCHEMA = [
 tool_schema_str = json.dumps(TOOL_SCHEMA, indent=2)
 
 SYSTEM_PROMPT_TEMPLATE = """
-你是一个专业的金融数据分析助手。你的主要目标是帮助用户获取、处理和可视化股票和指数数据。
+你是一个专业的金融数据分析智能体 (Agent)。你的核心职责是准确调用工具获取数据并进行分析。
 
----
-核心指令：
-1. **任务与工具匹配：** 如果用户的请求涉及到获取市场数据（如价格、历史数据、趋势、走势图），你**必须**使用提供的工具。
-2. **工具调用：** 如果你决定调用工具，请直接按照 Ollama/GPT-OSS 规范返回结构化的 `tool_calls` 字段。
-3. **最终回复：** 在工具调用完成后，基于工具返回的结果进行专业的分析和回复。
-4. **简洁性：** 除非必要，避免冗长或不相关的讨论。
+### 🚨 核心原则 (Critical Rules)
+1. **禁止猜测数据：** 任何涉及股票价格、历史行情、财务数据的请求，**必须**通过调用工具获取，严禁根据训练数据编造。
+2. **直接函数调用：** - 严禁创造不存在的函数（如 `assistant`, `call_tool`, `api_caller` 等）。
+   - **直接使用**工具列表中定义的函数名（如 `get_stock_zh_a_spot_data`）。
+3. **参数精确匹配：** 严格遵守工具定义中的参数名和日期格式（通常为 "YYYY-MM-DD"）。
 
-你拥有以下工具（JSON Schema）：
+### 📝 调用范例 (Few-Shot Examples)
+
+**正确示范 (Correct):**
+用户: "帮我查一下茅台(600519)最近的行情"
+模型行为: 调用函数 `get_stock_zh_a_spot_data`
+参数: {{"symbol": "600519"}}
+
+**错误示范 (Wrong - 不要这样做):**
+❌ 错误 1 (嵌套调用): {{"function": {{"name": "assistant", "arguments": {{"tool": "get_stock_zh_a_spot_data", ...}}}}}}
+❌ 错误 2 (错误的函数名): 调用 `search_stock` (如果工具表中没有这个函数)
+
+### 🛠️ 可用工具定义 (Tool Definitions)
+以下是你唯一允许使用的工具：
 
 {}
 
 ---
+请根据用户输入，一步步思考，如果需要数据，立即生成 Tool Call。
 """
-
 SYSTEM_PROMPT = SYSTEM_PROMPT_TEMPLATE.format(tool_schema_str)# 拼合SYSTEM_PROMPT_TEMPLATE与TOOL_SCHEMA
 
 
@@ -178,55 +191,180 @@ def clear_screen():
 
 
 # Tool Calling 解析与执行
+# 反射
+def execute_single_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
+    """
+    执行单个工具调用。
+    接收函数名和参数字典，返回 JSON 字符串结果。
+    """
 
-def execute_tool_call(tool_calls: List[Any]) -> str:    # 直接接收模型返回的 ToolCall 对象列表，执行工具，并返回 JSON 字符串结果。
-    if not tool_calls or not isinstance(tool_calls, list):
-        return json.dumps({"error": "工具执行失败: 输入不是有效的 ToolCall 列表。"})
+    # 1. 查找工具
+    if tool_name not in AVAILABLE_TOOLS:
+        error_msg = f"执行失败: 找不到工具 '{tool_name}'"
+        print(f"❌ {error_msg}")
+        return json.dumps({"error": error_msg}, ensure_ascii=False)
 
-    # 提取第一个工具调用（假设只处理第一个）
+    tool_function = AVAILABLE_TOOLS[tool_name]
+
     try:
-        tool_call = tool_calls[0]
+        # 2. 执行工具
+        # 使用 ** 解包字典参数传入函数
+        print(f"⚙️ 正在调用: {tool_name}({tool_args})")
+        result = tool_function(**tool_args)
 
-        # 提取工具名称和参数
-        tool_name = tool_call.function.name
-        tool_args = tool_call.function.arguments  # Dict[str, Any]
+        # 3. 统一返回值格式
+        # LLM 需要接收 String 类型的 content。
+        # 如果工具返回的是字典、列表等对象，必须转为 JSON 字符串。
+        if isinstance(result, (dict, list, int, float, bool)):
+            return json.dumps(result, ensure_ascii=False)
 
-    except AttributeError:
-        # 处理属性访问错误，如果结构与预期不符
-        # 在更换为 gpt-oss:20b 后有很大改善
-        return json.dumps({"error": "工具执行失败: 无法从 ToolCall 对象中解析出 function/name/arguments 属性。"})
-    except Exception as e:
-        return json.dumps({"error": f"工具执行失败: 解析 ToolCall 时发生未知错误: {e}"})
+        # 如果已经是字符串（例如 JSON 字符串），直接返回
+        return str(result)
 
-    # 2. 查找并执行工具
-    try:
-        if tool_name not in AVAILABLE_TOOLS:
-            return json.dumps({"error": f"找不到工具: {tool_name}"})
-
-        tool_function = AVAILABLE_TOOLS[tool_name]
-
-        # 执行工具
-        tool_result = tool_function(**tool_args)
-
-        return tool_result  # tool_result 已经是 JSON 字符串，保持返回类型一致
+    except TypeError as e:
+        # 捕捉参数错误（例如模型幻觉生成了不存在的参数）
+        error_msg = f"参数错误: 工具 '{tool_name}' 不接受提供的参数: {e}"
+        print(f"❌ {error_msg}")
+        return json.dumps({"error": error_msg}, ensure_ascii=False)
 
     except Exception as e:
-        # 记录详细错误信息
-        import traceback
-        traceback.print_exc()
-        return json.dumps({"error": f"工具函数 '{tool_name}' 执行失败: {e}"})
+        # 捕捉工具内部运行时的其他异常# 打印堆栈信息方便调试
+        error_msg = f"运行时错误: 工具 '{tool_name}' 执行异常: {str(e)}"
+        return json.dumps({"error": error_msg}, ensure_ascii=False)
 
 
+def chat_with_context(user_input):
+    """
+    支持连续工具调用的主对话逻辑
+    """
+    # 1. 准备初始上下文
+    # 注意：load_context 返回的通常是历史记录列表
+    history = load_context()
+
+    # 构建当前会话的消息列表
+    messages = []
+    messages.append({'role': 'system', 'content': SYSTEM_PROMPT})
+    messages.extend(history) # 添加历史记录
+    messages.append({'role': 'user', 'content': user_input})
+
+    # 保存用户输入到数据库
+    save_message('user', user_input)
+
+    print(f"\n👤 你: {user_input}\n")
+
+    # 设置最大循环次数，防止死循环 (例如模型不断报错不断重试)
+    MAX_ITERATIONS = 5
+    iteration = 0
+
+    while iteration < MAX_ITERATIONS:
+        print("🤖 Agent 思考中...")
+
+        # 2. 调用 Ollama
+        response = ollama.chat(
+            model=MODEL_NAME,
+            messages=messages,
+            stream=False,
+        )
+
+        response_message = response['message']
+
+        # 将模型的回复添加到消息历史中 (无论是文本还是工具调用，都必须加进去，否则模型会忘记它刚才做了什么)
+        messages.append(response_message)
+
+        # 3. 检查是否有工具调用
+        if response_message.get('tool_calls'):
+            # 获取原始对象列表
+            raw_tool_calls = response_message['tool_calls']
+
+            # ==================== 核心修复开始 ====================
+            # 将 ToolCall 对象列表转换为普通的字典列表 (Dict List)
+            # 这样既可以通过 json.dumps 保存，也可以通过 ['key'] 下标访问
+            tool_calls_serializable = []
+
+            for tool in raw_tool_calls:
+                if isinstance(tool, dict):
+                    # 如果已经是字典，直接添加
+                    tool_calls_serializable.append(tool)
+                elif hasattr(tool, 'model_dump'):
+                    # Ollama (Pydantic v2) 通常有 model_dump 方法
+                    tool_calls_serializable.append(tool.model_dump())
+                elif hasattr(tool, 'dict'):
+                    # 旧版本 Pydantic 可能用 .dict()
+                    tool_calls_serializable.append(tool.dict())
+                else:
+                    # 如果以上都没有，手动提取属性
+                    tool_calls_serializable.append({
+                        'function': {
+                            'name': tool.function.name,
+                            'arguments': tool.function.arguments
+                        },
+                        'type': 'function'
+                    })
+            # ==================== 核心修复结束 ====================
+
+            # 1. 保存到数据库 (现在传入的是字典列表，JSON 序列化不会报错了)
+            save_message('assistant', json.dumps(tool_calls_serializable, ensure_ascii=False))
+
+            print(f"Agent: **需要调用 {len(tool_calls_serializable)} 个工具**，正在执行...")
+
+            # 2. 遍历执行 (注意：这里遍历我们要用转换后的 tool_calls_serializable)
+            for tool in tool_calls_serializable:
+                # 因为我们已经转成了字典，所以这里可以用 ['key'] 访问，不会报错
+                function_name = tool['function']['name']
+                function_args = tool['function']['arguments']
+
+                logger.info(f"正在执行工具: {function_name} 参数: {function_args}")
+                try:
+                    tool_output = execute_single_tool(function_name,function_args)
+
+                except Exception as e:
+                    tool_output = f"Tool execution error: {str(e)}"
+
+                # 4. 将工具执行结果作为 'tool' 角色消息添加回去
+                tool_message = {
+                    'role': 'tool',
+                    'content': str(tool_output),
+                    # 某些 API 可能需要 tool_call_id，Ollama 目前主要依赖顺序，但加上更稳妥
+                    # 'name': function_name
+                }
+                messages.append(tool_message)
+
+                # 同时也保存工具结果到数据库，以便未来上下文使用
+                save_message('tool', str(tool_output))
+
+            # 循环继续：带着工具结果回到开头，再次调用 ollama.chat
+            iteration += 1
+            logger.info(f"工具执行完毕，进入第 {iteration} 轮思考...")
+
+        else:
+            # 5. 没有工具调用 -> 最终回复
+            final_content = response_message.get('content', '').strip()
+
+            if not final_content:
+                final_content = "任务已完成，但我没有更多内容要补充。"
+
+            print("\n   Agent 最终回复: ")
+            print(final_content)
+            print("\n" + "-" * 30 + "\n")
+
+            # 保存最终回复
+            save_message('assistant', final_content)
+
+            # 任务结束，跳出循环
+            return
+
+    # 如果循环次数用尽
+    print("⚠️ 达到最大对话轮数限制，停止执行。")
+'''
 def chat_with_context(user_input): # 主对话逻辑
     # 1. 准备消息列表 (包含系统提示和历史记录)
-    context_messages = load_context()
+    context_messages = load_context()# 初始化上下文
     context_messages.insert(0, {'role': 'system', 'content': SYSTEM_PROMPT})
     context_messages.append({'role': 'user', 'content': user_input})
 
-    # 将最新的用户输入保存到数据库
-    save_message('user', user_input)
+    save_message('user', user_input) # 将最新的用户输入保存到数据库
 
-    # 2. 初始 Ollama 调用 (可能会返回 Tool Call)
+    # 2. 初始 Ollama 调用
     print(f"\n👤 你: {user_input}\n")
     print("🤖 Agent 处理中...")
 
@@ -262,7 +400,7 @@ def chat_with_context(user_input): # 主对话逻辑
         save_message('assistant', tool_call_json)
         logger.info(f"LLM 识别为工具调用，正在执行：{tool_call_json[:100]}...")
 
-        tool_output = execute_tool_call(message.tool_calls)
+        tool_output = execute_single_tool(message.tool_calls)
 
         # 4. 第二次 Ollama 调用 (带着工具结果)
         logger.info("进行第二次 LLM 调用 (带工具结果) 以获取最终回复...")
@@ -273,7 +411,7 @@ def chat_with_context(user_input): # 主对话逻辑
         second_call_messages.append({'role': 'assistant', 'content': tool_call_json})
         second_call_messages.append({'role': 'tool', 'content': tool_output})
 
-        # 4b. 第二次流式调用
+        # 4b. 第二次 Ollama 调用
         final_response = ollama.chat(
             model=MODEL_NAME,
             messages=second_call_messages,
@@ -303,7 +441,7 @@ def chat_with_context(user_input): # 主对话逻辑
 
         # 4. 保存第一个响应
         save_message('assistant', full_response_content)
-
+'''
 # 主循环
 def interactive_chat():
     init_db()
