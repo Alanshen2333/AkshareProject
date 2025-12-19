@@ -5,6 +5,7 @@ description = "Add your description here"
 requires-python = ">=3.12"
 dependencies = [
     "akshare==1.17.83",
+    "db>=0.1.1",
     "matplotlib>=3.10.7",
     "notebook>=7.4.7",
     "ollama==0.6.0",

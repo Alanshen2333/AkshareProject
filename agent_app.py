@@ -276,9 +276,6 @@ def chat_with_context(user_input):
             # 获取原始对象列表
             raw_tool_calls = response_message['tool_calls']
 
-            # ==================== 核心修复开始 ====================
-            # 将 ToolCall 对象列表转换为普通的字典列表 (Dict List)
-            # 这样既可以通过 json.dumps 保存，也可以通过 ['key'] 下标访问
             tool_calls_serializable = []
 
             for tool in raw_tool_calls:
@@ -300,7 +297,6 @@ def chat_with_context(user_input):
                         },
                         'type': 'function'
                     })
-            # ==================== 核心修复结束 ====================
 
             # 1. 保存到数据库 (现在传入的是字典列表，JSON 序列化不会报错了)
             save_message('assistant', json.dumps(tool_calls_serializable, ensure_ascii=False))
@@ -355,93 +351,7 @@ def chat_with_context(user_input):
 
     # 如果循环次数用尽
     print("⚠️ 达到最大对话轮数限制，停止执行。")
-'''
-def chat_with_context(user_input): # 主对话逻辑
-    # 1. 准备消息列表 (包含系统提示和历史记录)
-    context_messages = load_context()# 初始化上下文
-    context_messages.insert(0, {'role': 'system', 'content': SYSTEM_PROMPT})
-    context_messages.append({'role': 'user', 'content': user_input})
 
-    save_message('user', user_input) # 将最新的用户输入保存到数据库
-
-    # 2. 初始 Ollama 调用
-    print(f"\n👤 你: {user_input}\n")
-    print("🤖 Agent 处理中...")
-
-
-    # LLM 响应的第一部分
-    response = ollama.chat(
-        model=MODEL_NAME,
-        messages=context_messages,
-        stream=False,
-    )
-
-    message = response['message']
-
-    # 核心判断逻辑
-    # 检查是否有 tool_calls 字段，且它是一个非空的列表
-    if 'tool_calls' in message and isinstance(message['tool_calls'], list) and message['tool_calls']:
-
-        tool_call_list = message['tool_calls']
-
-        # 提取第一个工具调用
-        first_tool_call = tool_call_list[0]
-        tool_function = first_tool_call['function']
-
-        tool_name = tool_function['name']
-        tool_args = tool_function['arguments']
-
-        # 构建 JSON 字符串用于数据库和 LLM 的第二次调用
-        tool_call_data = {"tool": tool_name, "arguments": tool_args}
-        tool_call_json = json.dumps(tool_call_data)
-
-        # 3. 工具执行逻辑
-        print(f"Agent: **已识别到工具调用**，正在执行...")
-        save_message('assistant', tool_call_json)
-        logger.info(f"LLM 识别为工具调用，正在执行：{tool_call_json[:100]}...")
-
-        tool_output = execute_single_tool(message.tool_calls)
-
-        # 4. 第二次 Ollama 调用 (带着工具结果)
-        logger.info("进行第二次 LLM 调用 (带工具结果) 以获取最终回复...")
-
-        # 4a. 准备第二次调用的消息列表 (保持不变)
-        second_call_messages = [{'role': 'system', 'content': SYSTEM_PROMPT}] + context_messages.copy()
-        second_call_messages.append({'role': 'user', 'content': user_input})
-        second_call_messages.append({'role': 'assistant', 'content': tool_call_json})
-        second_call_messages.append({'role': 'tool', 'content': tool_output})
-
-        # 4b. 第二次 Ollama 调用
-        final_response = ollama.chat(
-            model=MODEL_NAME,
-            messages=second_call_messages,
-            stream=False
-        )
-
-        # 4c. 提取最终响应
-        final_answer = final_response.message.content.strip()
-
-        print("\n   Agent 最终回复: ")
-        print(final_answer)  # 直接打印完整回复
-
-        print("\n" + "-" * 30 + "\n")
-    else:
-
-        # 提取 content 字段作为最终回复
-        full_response_content = message.get('content', '').strip()
-
-        if not full_response_content:
-            # 如果模型没有返回 content，但也没有 tool_calls，可能是闲聊模式的思考过程
-            full_response_content = "我没有找到可以执行的工具，请明确您的问题。"
-
-        # 3. 直接回复
-        print(" Agent 最终回复: ")
-        print(full_response_content)
-        print("\n" + "-" * 30 + "\n")
-
-        # 4. 保存第一个响应
-        save_message('assistant', full_response_content)
-'''
 # 主循环
 def interactive_chat():
     init_db()
